@@ -4,9 +4,12 @@ version = "0.1.0"
 authors = ["T. Jameson Little <t.jameson.little@gmail.com>"]
 
 [dependencies]
+reqwest = "0.7"
+
 rocket = "0.3"
 rocket_codegen = "0.3"
 rocket_contrib = "0.3"
 
 serde = "1"
 serde_derive = "1"
+serde-xml-rs = "0.2.0"

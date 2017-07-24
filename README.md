@@ -10,7 +10,21 @@ installation
 
 Clone this repository and build with `cargo`:
 
-    cargo build
+    $ cargo build --release
+
+By default, `wopi` connects to `https://localhost:9980` (default for Collabora Office CODE in examples). To make it work, you'll need to fetch its TLS certificates:
+
+Fetch certificates:
+
+    $ openssl s_client -showcerts -connect 127.0.0.1:9980 < /dev/null
+
+Extract the certificate(s) from the file (starts with `-----BEGIN CERTIFICATE-----` and ends with `-----END CERTIFICATE-----`). For each certificate, turn it into a DER-encoded certificate:
+
+    $ openssl x509 -in my-cert.cert -outform der -out my-cert.der
+
+Put the DER-encoded certificates into a directory called `certs` in the working directory.
+
+Run with `cargo run`.
 
 license
 =======

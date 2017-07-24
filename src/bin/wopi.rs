@@ -220,5 +220,10 @@ fn rocket() -> rocket::Rocket {
 }
 
 fn main() {
+    match parse_discovery("https://localhost:9980/hosting/discovery") {
+        Ok(discovery) => println!("res: {:?}", discovery),
+        Err(err) => println!("error fetching discovery: {}", err),
+    };
+
     rocket().launch();
 }

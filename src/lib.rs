@@ -3,6 +3,11 @@ extern crate rocket;
 extern crate serde;
 #[macro_use]
 extern crate serde_derive;
+extern crate serde_xml_rs;
+
+extern crate reqwest;
+
+use std::io::Read;
 
 use rocket::Outcome;
 use rocket::http::Status;
@@ -917,4 +922,57 @@ impl<'a, 'r> FromRequest<'a, 'r> for UnlockAndRelock {
             Outcome::Forward(())
         }
     }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryNetZone {
+    name: String,
+    #[serde(rename = "app")]
+    apps: Vec<DiscoveryApp>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryApp {
+    name: String,
+    action: DiscoveryAction,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct DiscoveryAction {
+    ext: String,
+    name: String,
+    urlsrc: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Discovery {
+    #[serde(rename = "net-zone")]
+    net_zone: DiscoveryNetZone,
+}
+
+pub fn get_certs() -> std::io::Result<Vec<Vec<u8>>> {
+    std::fs::read_dir("certs")?
+        .map(|entry| {
+            let mut buf = Vec::new();
+            std::fs::File::open(entry?.path())?.read_to_end(&mut buf)?;
+            Ok(buf)
+        })
+        .collect()
+}
+
+pub fn parse_discovery(uri: &str) -> reqwest::Result<Discovery> {
+    let mut res = {
+        let mut builder = reqwest::Client::builder()?;
+        // TODO: handle errors
+        if let Ok(certs) = get_certs() {
+            for cert in certs {
+                let cert = reqwest::Certificate::from_der(cert.as_slice())?;
+                builder.add_root_certificate(cert)?;
+            }
+        }
+
+        builder.build()?.get(uri)?.send()?
+    };
+
+    Ok(serde_xml_rs::deserialize(res).unwrap())
 }
