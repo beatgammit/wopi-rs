@@ -32,7 +32,7 @@ pub struct CheckFileInfoResponse {
     // external services referenced in the file (for example, a marketplace of
     // embeddable JavaScript apps).
     //
-    // If this value is f alse, then the WOPI client MUST NOT allow such connections.
+    // If this value is false, then the WOPI client MUST NOT allow such connections.
     #[serde(rename = "AllowExternalMarketplace")]
     allow_external_marketplace: Option<bool>,
 
@@ -122,13 +122,13 @@ pub struct CheckFileInfoResponse {
     #[serde(rename = "EditAndReplyUrl")]
     edit_and_reply_url: Option<String>,
 
-    // A Boolean v alue that indicates that the WOPI client SHOULD notify the
+    // A Boolean value that indicates that the WOPI client SHOULD notify the
     // WOPI server in the event that the user attempts to edit the file.
     #[serde(rename = "EditModePostMessage")]
     edit_mode_post_message: Option<bool>,
 
     // A Boolean value that indicates that the WOPI client SHOULD notify the
-    // WOPI server in the event that th e user attempts to edit the file.
+    // WOPI server in the event that the user attempts to edit the file.
     #[serde(rename = "EditNotificationPostMessage")]
     edit_notification_post_message: bool,
 
@@ -142,7 +142,7 @@ pub struct CheckFileInfoResponse {
     #[serde(rename = "FileNameMaxLength")]
     file_name_max_length: Option<i64>,
 
-    // A Boolean va lue that indicates that the WOPI client SHOULD notify the
+    // A Boolean value that indicates that the WOPI client SHOULD notify the
     // WOPI server in the event that the user attempts to share the file.
     #[serde(rename = "FileSharingPostMessage")]
     file_sharing_post_message: bool,
@@ -436,7 +436,7 @@ pub struct CheckFileInfoResponse {
 
     // A Boolean value that indicates that the WOPI client MUST NOT allow the
     // user to use the WOPI client’s editing functionality to operate on the
-    // file. This does not mean that the user doesn’t have rights to edit the
+    // file. This does not mean that the user doesn't have rights to edit the
     // file.
     #[serde(rename = "WebEditingDisabled")]
     web_editing_disabled: Option<bool>,
@@ -445,7 +445,7 @@ pub struct CheckFileInfoResponse {
     #[serde(rename = "WorkflowType")]
     workflow_type: Option<Vec<String>>,
 
-    // A string representing the current ver sion of the file based on the WOPI
+    // A string representing the current version of the file based on the WOPI
     // server’s file versioning schema.
     //
     // This value MUST change when the file content changes, and version values
@@ -694,7 +694,7 @@ pub struct CheckFolderInfoResponse {
 
     // A Boolean value that indicates that the WOPI client MUST NOT allow the
     // user to use the WOPI client’s editing functionality to operate on the
-    // file. This does not mean that the user doesn’t have rights to edit the
+    // file. This does not mean that the user doesn't have rights to edit the
     // file.
     #[serde(rename = "WebEditingDisabled")]
     web_editing_disabled: Option<bool>,
