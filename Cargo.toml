@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["T. Jameson Little <t.jameson.little@gmail.com>"]
 
 [dependencies]
+error-chain = "0.10"
+regex = "0.2"
+
 reqwest = "0.7"
 
 rocket = "0.3"
