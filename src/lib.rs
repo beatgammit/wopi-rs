@@ -7,7 +7,13 @@ extern crate serde_xml_rs;
 
 extern crate reqwest;
 
+extern crate uuid;
+
 use std::io::Read;
+
+use std::path::{Path, PathBuf};
+
+use uuid::Uuid;
 
 use rocket::Outcome;
 use rocket::http::Status;
@@ -975,4 +981,38 @@ pub fn parse_discovery(uri: &str) -> reqwest::Result<Discovery> {
     };
 
     Ok(serde_xml_rs::deserialize(res).unwrap())
+}
+
+fn path_from_uuid(uuid: Uuid) -> PathBuf {
+    uuid.as_bytes()
+        .iter()
+        .map(|b| format!("{:x}", b))
+        .collect::<PathBuf>()
+}
+
+fn create_file() {
+    use std::str;
+
+    let my_uuid = Uuid::new_v4();
+    println!("{}", my_uuid);
+
+    let path = path_from_uuid(my_uuid);
+    println!("Path: {:?}", path);
+}
+
+// Conditionally compile the module `test` only when the test-suite is run.
+#[cfg(test)]
+mod test {
+    extern crate uuid;
+    use uuid::Uuid;
+
+    use super::*;
+
+    #[test]
+    fn path_from_uuid_test() {
+        let my_uuid = Uuid::new_v4();
+        let path = path_from_uuid(my_uuid);
+
+        assert!(path.components().count() == my_uuid.as_bytes().len());
+    }
 }

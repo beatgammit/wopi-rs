@@ -16,3 +16,5 @@ rocket_contrib = "0.3"
 serde = "1"
 serde_derive = "1"
 serde-xml-rs = "0.2.0"
+
+uuid = {version = "0.5", features = ["serde", "v4"]}
