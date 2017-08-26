@@ -1,10 +1,6 @@
-// `error_chain!` can recurse deeply
-#![recursion_limit = "1024"]
-
-#[macro_use]
-extern crate error_chain;
-
 extern crate regex;
+
+extern crate wopi;
 
 use std::env::args;
 use std::process::{Command, Stdio};
@@ -12,12 +8,7 @@ use std::io::Write;
 
 use regex::Regex;
 
-mod errors {
-    // Create the Error, ErrorKind, ResultExt, and Result types
-    error_chain!{}
-}
-
-use errors::*;
+use wopi::errors::*;
 
 fn main() {
     // TODO: use an argument parser
@@ -56,8 +47,9 @@ fn run(addr: String) -> Result<()> {
         .output()
         .chain_err(|| "error getting certs")?;
 
-    let re = Regex::new(r"((?m)-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----)")
-        .chain_err(|| "error initializing regex")?;
+    let re = Regex::new(
+        r"((?m)-----BEGIN CERTIFICATE-----[^-]+-----END CERTIFICATE-----)",
+    ).chain_err(|| "error initializing regex")?;
 
     let output = String::from_utf8_lossy(&out.stdout);
     let mut i = 0;
@@ -71,7 +63,11 @@ fn run(addr: String) -> Result<()> {
             .spawn()
             .chain_err(|| "error starting openssl")?;
 
-        child.stdin.as_mut().unwrap().write_all(cert.as_bytes())
+        child
+            .stdin
+            .as_mut()
+            .unwrap()
+            .write_all(cert.as_bytes())
             .chain_err(|| "error writing cert to openssl")?;
         child.wait().chain_err(|| "error converting cert to der")?;
 

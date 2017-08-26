@@ -1,4 +1,15 @@
+// `error_chain!` can recurse deeply
+#![recursion_limit = "1024"]
+
 extern crate rocket;
+#[macro_use]
+extern crate rocket_contrib;
+
+#[macro_use]
+extern crate diesel;
+#[macro_use]
+extern crate diesel_codegen;
+extern crate dotenv;
 
 extern crate serde;
 #[macro_use]
@@ -11,18 +22,75 @@ extern crate uuid;
 
 use std::io::Read;
 
-use std::path::{Path, PathBuf};
+use std::env;
+use std::path::PathBuf;
 
-use uuid::Uuid;
+use diesel::prelude::*;
+use diesel::pg::PgConnection;
+use dotenv::dotenv;
 
 use rocket::Outcome;
 use rocket::http::Status;
-use rocket::request::{self, Request, FromRequest};
+use rocket::request::{self, FromRequest, Request};
+
+use uuid::Uuid;
+
+use errors::*;
+
+pub mod schema;
+pub mod models;
+
+use self::models::{File, NewFile};
+
+#[macro_use]
+extern crate error_chain;
+
+pub mod errors {
+    use std::io::Cursor;
+
+    use rocket::*;
+    use rocket::http::{ContentType, Status};
+    use rocket::response::Responder;
+
+    // Create the Error, ErrorKind, ResultExt, and Result types
+    error_chain!{}
+
+    // Implement `Responder` for `error_chain`'s `Error` type
+    // that we just generated
+    impl<'r> Responder<'r> for Error {
+        fn respond_to(self, _: &Request) -> ::std::result::Result<Response<'r>, Status> {
+            // Render the whole error chain to a single string
+            let mut rslt = String::new();
+            rslt += &format!("Error: {}", self);
+            self.iter()
+                .skip(1)
+                .map(|ce| rslt += &format!(", caused by: {}", ce))
+                .collect::<Vec<_>>();
+
+            // Create JSON response
+            let resp = json!({
+                "status": "failure",
+                "message": rslt,
+            }).to_string();
+
+            // Respond. The `Ok` here is a bit of a misnomer. It means we
+            // successfully created an error response
+            Ok(
+                Response::build()
+                    .status(Status::BadRequest)
+                    .header(ContentType::JSON)
+                    .sized_body(Cursor::new(resp))
+                    .finalize(),
+            )
+        }
+    }
+
+}
 
 const X_WOPI_OVERRIDE: &str = "X-WOPI-Override";
-const X_WOPI_SIZE: &str = "X-WOPI-Size";
-const X_WOPI_RELATIVE_TARGET: &str = "X-WOPI-RelativeTarget";
-const X_WOPI_LOCK: &str = "X-WOPI-Lock";
+// const X_WOPI_SIZE: &str = "X-WOPI-Size";
+// const X_WOPI_RELATIVE_TARGET: &str = "X-WOPI-RelativeTarget";
+// const X_WOPI_LOCK: &str = "X-WOPI-Lock";
 const X_WOPI_OLD_LOCK: &str = "X-WOPI-OldLock";
 
 #[derive(Serialize)]
@@ -32,75 +100,64 @@ pub struct CheckFileInfoResponse {
     //
     // If this value is false, then the WOPI client MUST NOT allow such connections.
     #[serde(rename = "AllowAdditionalMicrosoftServices")]
-    allow_additional_microsoft_services: Option<bool>,
+    allow_additional_microsoft_services:
+        Option<bool>,
 
     // A Boolean value that indicates the WOPI client allows connections to
     // external services referenced in the file (for example, a marketplace of
     // embeddable JavaScript apps).
     //
     // If this value is false, then the WOPI client MUST NOT allow such connections.
-    #[serde(rename = "AllowExternalMarketplace")]
-    allow_external_marketplace: Option<bool>,
+    #[serde(rename = "AllowExternalMarketplace")] allow_external_marketplace: Option<bool>,
 
     // The name of the file without the path. Used for display in user
     // interface (UI), and determining the extension of the file.
-    #[serde(rename = "BaseFileName")]
-    base_file_name: String,
+    #[serde(rename = "BaseFileName")] base_file_name: String,
 
     // A string that the WOPI client displays to the user that indicates the
     // brand name of the WOPI server.
-    #[serde(rename = "BreadcrumbBrandName")]
-    breadcrumb_brand_name: Option<String>,
+    #[serde(rename = "BreadcrumbBrandName")] breadcrumb_brand_name: Option<String>,
 
     // A URI to a web page that the WOPI client navigates to when the user
     // clicks on UI that displays BreadcrumbBrandName.
-    #[serde(rename = "BreadcrumbBrandUrl")]
-    breadcrumb_brand_url: String,
+    #[serde(rename = "BreadcrumbBrandUrl")] breadcrumb_brand_url: Option<String>,
 
     // A string that the WOPI client displays to the user that indicates the
     // name of the file.
-    #[serde(rename = "BreadcrumbDocName")]
-    breadcrumb_doc_name: Option<String>,
+    #[serde(rename = "BreadcrumbDocName")] breadcrumb_doc_name: Option<String>,
 
     // A URI to a web page that the WOPI client navigates to when the user
     // clicks on UI that displays BreadcrumbDocName.
-    #[serde(rename = "BreadcrumbDocUrl")]
-    breadcrumb_doc_url: Option<String>,
+    #[serde(rename = "BreadcrumbDocUrl")] breadcrumb_doc_url: Option<String>,
 
     // A string that the WOPI client displays to the user that indicates the
     // name of the folder that contains the file.
-    #[serde(rename = "BreadcrumbFolderName")]
-    breadcrumb_folder_name: Option<String>,
+    #[serde(rename = "BreadcrumbFolderName")] breadcrumb_folder_name: Option<String>,
 
     // A URI to a web page that the WOPI client navigates to when the user
     // clicks on UI that displays BreadcrumbFolderName.
-    #[serde(rename = "BreadcrumbFolderUrl")]
-    breadcrumb_folder_url: Option<String>,
+    #[serde(rename = "BreadcrumbFolderUrl")] breadcrumb_folder_url: Option<String>,
 
     // A user - accessible URI directly to the file int ended for opening the
     // file through a client.
     //
     // Can be a DAV URL ([RFC5323]), but MAY be any URL that can be handled by
     // a client that can open a file of the given type.
-    #[serde(rename = "ClientUrl")]
-    client_url: Option<String>,
+    #[serde(rename = "ClientUrl")] client_url: Option<String>,
 
     // A Boolean value that indicates that the WOPI client SHOULD close the
     // browser window containing the output of the WOPI client when the user
     // calls the close UI.
-    #[serde(rename = "CloseButtonClosesWindow")]
-    close_button_closes_window: Option<bool>,
+    #[serde(rename = "CloseButtonClosesWindow")] close_button_closes_window: Option<bool>,
 
     // A Boolean value that indicates that the WOPI client SHOULD notify the
     // WOPI server in the event that the user closes the rendering or editing
     // client currently using this file.
-    #[serde(rename = "ClosePostMessage")]
-    close_post_message: bool,
+    #[serde(rename = "ClosePostMessage")] close_post_message: bool,
 
     // A URI to a web page that the implementer deems useful to a user in the
     // event that the user closes the rendering or editing client currently using this file.
-    #[serde(rename = "CloseUrl")]
-    close_url: Option<String>,
+    #[serde(rename = "CloseUrl")] close_url: Option<String>,
 
     // A Boolean value that indicates that the WOPI client MUST disable caching
     // of file contents in the browser cache.
@@ -109,90 +166,74 @@ pub struct CheckFileInfoResponse {
 
     // A Boolean value t hat indicates that the WOPI client MUST disable any
     // print functionality under its control.
-    #[serde(rename = "DisablePrint")]
-    disable_print: Option<bool>,
+    #[serde(rename = "DisablePrint")] disable_print: Option<bool>,
 
     // A Boolean value that indicates that the WOPI client MUST NOT permit the
     // use of machine translation functionality that is exposed by the WOPI
     // client.
-    #[serde(rename = "DisableTranslation")]
-    disable_translation: bool,
+    #[serde(rename = "DisableTranslation")] disable_translation: bool,
 
     // A user - accessible URI to the file intended to allow the user to
     // download a copy of the file.
-    #[serde(rename = "DownloadUrl")]
-    download_url: Option<String>,
+    #[serde(rename = "DownloadUrl")] download_url: Option<String>,
 
     // A URI to a web page that provides an editing experience for the file,
     // utilizing the WOPI client.
-    #[serde(rename = "EditAndReplyUrl")]
-    edit_and_reply_url: Option<String>,
+    #[serde(rename = "EditAndReplyUrl")] edit_and_reply_url: Option<String>,
 
     // A Boolean value that indicates that the WOPI client SHOULD notify the
     // WOPI server in the event that the user attempts to edit the file.
-    #[serde(rename = "EditModePostMessage")]
-    edit_mode_post_message: Option<bool>,
+    #[serde(rename = "EditModePostMessage")] edit_mode_post_message: Option<bool>,
 
     // A Boolean value that indicates that the WOPI client SHOULD notify the
     // WOPI server in the event that the user attempts to edit the file.
-    #[serde(rename = "EditNotificationPostMessage")]
-    edit_notification_post_message: bool,
+    #[serde(rename = "EditNotificationPostMessage")] edit_notification_post_message: bool,
 
     // A string specifying the file extension of the file.
     // This value MUST begin with a ".".
-    #[serde(rename = "FileExtension")]
-    file_extension: Option<String>,
+    #[serde(rename = "FileExtension")] file_extension: Option<String>,
 
     // An integer indicating the maximum length for file names, including the
     // file extension, supported by the WOPI server.
-    #[serde(rename = "FileNameMaxLength")]
-    file_name_max_length: Option<i64>,
+    #[serde(rename = "FileNameMaxLength")] file_name_max_length: Option<i64>,
 
     // A Boolean value that indicates that the WOPI client SHOULD notify the
     // WOPI server in the event that the user attempts to share the file.
-    #[serde(rename = "FileSharingPostMessage")]
-    file_sharing_post_message: bool,
+    #[serde(rename = "FileSharingPostMessage")] file_sharing_post_message: bool,
 
     // A URI to a location that allows the user to share the file.
-    #[serde(rename = "FileSharingUrl")]
-    file_sharing_url: Option<String>,
+    #[serde(rename = "FileSharingUrl")] file_sharing_url: Option<String>,
 
     // A URI to the file location that the WOPI client uses to get the file.
     //
     // If this is provided, a WOPI client MUST use this URI to get the file
     // instead of HTTP://server/<...>/wopi*/files/<id>/contents (see section 3.3.5.3).
-    #[serde(rename = "FileUrl")]
-    file_url: Option<String>,
+    #[serde(rename = "FileUrl")] file_url: Option<String>,
 
     // A string that is used by the WOPI server to uniquely identify the user.
-    #[serde(rename = "HostAuthenticationId")]
-    host_authentication_id: Option<String>,
+    #[serde(rename = "HostAuthenticationId")] host_authentication_id: Option<String>,
 
     // A URI to a web page that provides an editing experience for the file,
     // utilizing the WOPI client.
-    #[serde(rename = "HostEditUrl")]
-    host_edit_url: String,
+    #[serde(rename = "HostEditUrl")] host_edit_url: String,
 
     // A URI to a web page that provides access to an editing experience for the
     // file that can be embedded in another HTML page.
     //
     // For example, a page that provides an HTML snippet that can be inserted
     // into the HTML of a blog.
-    #[serde(rename = "HostEmbeddedEditUrl")]
-    host_embedded_edit_url: Option<String>,
+    #[serde(rename = "HostEmbeddedEditUrl")] host_embedded_edit_url: Option<String>,
 
     // A URI to a web page that provides access to a viewing experience for the
     // file that can be embedded in another HTML page.
     //
     // For example, a page that p rovides an HTML snippet that can be inserted
     // into the HTML of a blog
-    #[serde(rename = "HostEmbeddedViewUrl")]
-    host_embedded_view_url: Option<String>,
+    #[serde(rename = "HostEmbeddedViewUrl")] host_embedded_view_url: Option<String>,
 
     // A string that is the name provided by the WOPI server used to identify it
     // for logging and other informational purposes.
-    #[serde(rename = "HostName")]
-    host_name: Option<String>,
+    #[serde(rename = "HostName")] host_name: Option<String>,
 
     // A string that is used by the WOPI server to pass arbitrary information to
     // the WOPI client. The WOPI client MAY ignore this string if it does not
@@ -200,46 +241,40 @@ pub struct CheckFileInfoResponse {
     //
     // A WOPI server MUST NOT require that a WOPI client understand the contents
     // of this string to operate.
-    #[serde(rename = "HostNotes")]
-    host_notes: Option<String>,
+    #[serde(rename = "HostNotes")] host_notes: Option<String>,
 
     // A URI that is the base URI for REST operations for the file.
-    #[serde(rename = "HostRestUrl")]
-    host_rest_url: Option<String>,
+    #[serde(rename = "HostRestUrl")] host_rest_url: Option<String>,
 
     // A URI to a web page that provides a viewing experience for the file
     // utilizing the WOPI client.
-    #[serde(rename = "HostViewUrl")]
-    host_view_url: Option<String>,
+    #[serde(rename = "HostViewUrl")] host_view_url: Option<String>,
 
     // A string that the WOPI client SHOULD display to the user indicating the
     // Information Rights Management (IRM) policy for the file.
     //
     // This value SHOULD be combined with IrmPolicyTitle.
-    #[serde(rename = "IrmPolicyDescription")]
-    irm_policy_description: Option<String>,
+    #[serde(rename = "IrmPolicyDescription")] irm_policy_description: Option<String>,
 
     // A string that the WOPI client SHOULD display to the user indicating the
     // IRM policy for the file.
     //
     // This value SHOULD be combined with IrmPolicyDescription.
-    #[serde(rename = "IrmPolicyTitle")]
-    irm_policy_title: String,
+    #[serde(rename = "IrmPolicyTitle")] irm_policy_title: String,
 
     // A Boolean value that indicates that the WOPI client SHOULD take measures
     // to ensure the user is properly licensed prior to allowing editing of the
     // file.
     #[serde(rename = "LicenseCheckForEditIsEnabled")]
-    license_check_for_edit_is_enabled: Option<bool>,
+    license_check_for_edit_is_enabled:
+        Option<bool>,
 
     // A string that SHOULD uniquely identify the owner of the file.
-    #[serde(rename = "OwnerId")]
-    owner_id: String,
+    #[serde(rename = "OwnerId")] owner_id: String,
 
     // A string that the WOPI client MUST use as the targetOrigin parameter when
     // sending messages as described in [W3C - HTML5WEBMSG].
-    #[serde(rename = "PostMessageOrigin")]
-    post_message_origin: Option<String>,
+    #[serde(rename = "PostMessageOrigin")] post_message_origin: Option<String>,
 
     // A string that identifies the provider of information that a WOPI client
     // uses to discover information about the user ’s online status (for
@@ -247,142 +282,115 @@ pub struct CheckFileInfoResponse {
     //
     // A WOPI client requires knowledge of specific presence providers to be
     // able to take advantage of this value.
-    #[serde(rename = "PresenceProvider")]
-    presence_provider: Option<String>,
+    #[serde(rename = "PresenceProvider")] presence_provider: Option<String>,
 
     // A string that identifies the user in the context of the PresenceProvider.
-    #[serde(rename = "PresenceUserId")]
-    presence_user_id: Option<String>,
+    #[serde(rename = "PresenceUserId")] presence_user_id: Option<String>,
 
     // A URI to a webpage that explains the privacy policy of the WOPI server.
-    #[serde(rename = "PrivacyUrl")]
-    privacy_url: Option<String>,
+    #[serde(rename = "PrivacyUrl")] privacy_url: Option<String>,
 
     // A Boolean value that indicates that the WOPI client SHOULD take measures
     // to prevent copying and printing of the file.
     //
     // This is intended to help enforce IRM in WOPI clients.
-    #[serde(rename = "ProtectInClient")]
-    protect_in_client: Option<bool>,
+    #[serde(rename = "ProtectInClient")] protect_in_client: Option<bool>,
 
     // Indicates that, for this user, the file cannot be changed.
-    #[serde(rename = "ReadOnly")]
-    read_only: Option<bool>,
+    #[serde(rename = "ReadOnly")] read_only: Option<bool>,
 
     // A Boolean value that indicates that the WOPI client MUST NOT allow the
     // user to download the file or open the file in a separate application.
-    #[serde(rename = "RestrictedWebViewOnly")]
-    restricted_web_view_only: Option<bool>,
+    #[serde(rename = "RestrictedWebViewOnly")] restricted_web_view_only: Option<bool>,
 
     // If it is present and not empty, it is a 256 bit SHA-2 encoded [FIPS1802]
     // hash of the file contents.
-    #[serde(rename = "SHA256")]
-    sha256: Option<String>,
+    #[serde(rename = "SHA256")] sha256: Option<String>,
 
     // A URI that will sign the current user into the WOPI server supported
     // authentication system.
-    #[serde(rename = "SignInUrl")]
-    sign_in_url: Option<String>,
+    #[serde(rename = "SignInUrl")] sign_in_url: Option<String>,
 
     // A URI that will sign the current user out of the WOPI server supported
     // authentication system.
-    #[serde(rename = "SignoutUrl")]
-    signout_url: String,
+    #[serde(rename = "SignoutUrl")] signout_url: String,
 
     // The size of the file expressed in bytes.
-    #[serde(rename = "Size")]
-    size: i64,
+    #[serde(rename = "Size")] size: i64,
 
     // An array of strings indicating the share URL types supported by the WOPI
     // server.
-    #[serde(rename = "SupportedShareUrlTypes")]
-    supported_share_url_types: Option<Vec<String>>,
+    #[serde(rename = "SupportedShareUrlTypes")] supported_share_url_types: Option<Vec<String>>,
 
     // A Boolean value that indicates that the WOPI server supports multiple
     // users making changes to this file simultaneously.
-    #[serde(rename = "SupportsCoauth")]
-    supports_coauth: Option<bool>,
+    #[serde(rename = "SupportsCoauth")] supports_coauth: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports
     // ExecuteCellStorageRequest (see section 3.3.5.1.4) and
     // ExcecuteCellStorageRelativeRequest (see section 3.3.5.1.3) operations for
     // this file.
-    #[serde(rename = "SupportsCobalt")]
-    supports_cobalt: Option<bool>,
+    #[serde(rename = "SupportsCobalt")] supports_cobalt: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports lock IDs up
     // to 1024 ASCII characters in length.
-    #[serde(rename = "SupportsExtendedLockLength")]
-    supports_extended_lock_length: Option<bool>,
+    #[serde(rename = "SupportsExtendedLockLength")] supports_extended_lock_length: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports creating new
     // files using the WOPI client.
-    #[serde(rename = "SupportsFileCreation")]
-    supports_file_creation: Option<bool>,
+    #[serde(rename = "SupportsFileCreation")] supports_file_creation: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports
     // EnumerateChildren (see section 3.3.5.4.1) and DeleteFile (see section
     // 3.3.5.1.2) operations for this file.
-    #[serde(rename = "SupportsFolders")]
-    supports_folders: Option<bool>,
+    #[serde(rename = "SupportsFolders")] supports_folders: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports GetLock (see
     // section 3.3.5.1.5).
-    #[serde(rename = "SupportsGetLock")]
-    supports_get_lock: Option<bool>,
+    #[serde(rename = "SupportsGetLock")] supports_get_lock: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports Lock (see
     // section 3.3.5.1.8), Unlock (see section 3.3.5.1.15), RefreshLock (see
     // section 3.3.5.1.12), and UnlockAndRelock (see section 3.3.5.1.16)
     // operations for this file.
-    #[serde(rename = "SupportsLocks")]
-    supports_locks: Option<bool>,
+    #[serde(rename = "SupportsLocks")] supports_locks: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports RenameFile
     // (see section 3.3.5.1.13).
-    #[serde(rename = "SupportsRename")]
-    supports_rename: Option<bool>,
+    #[serde(rename = "SupportsRename")] supports_rename: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports scenarios
     // where users can operate on files in limited ways via restricted URLs.
-    #[serde(rename = "SupportsScenarioLinks")]
-    supports_scenario_links: Option<bool>,
+    #[serde(rename = "SupportsScenarioLinks")] supports_scenario_links: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports calls to a
     // secure data store utilizing credential s stored in the file.
-    #[serde(rename = "SupportsSecureStore")]
-    supports_secure_store: Option<bool>,
+    #[serde(rename = "SupportsSecureStore")] supports_secure_store: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports PutFile (see
     // section 3.3.5.3.2) and PutRelativeFile (see section 3.3.5.1.9) operations
     // for this file.
-    #[serde(rename = "SupportsUpdate")]
-    supports_update: Option<bool>,
+    #[serde(rename = "SupportsUpdate")] supports_update: Option<bool>,
 
     // A Boolean value that indicates that the WOPI server supports PutUserInfo
     // (see section 3.3.5.1.10).
-    #[serde(rename = "SupportsUserInfo")]
-    supports_user_info: Option<bool>,
+    #[serde(rename = "SupportsUserInfo")] supports_user_info: Option<bool>,
 
     // A string that is used by the WOPI server to uniquely identify the tenant.
-    #[serde(rename = "TenantId")]
-    tenant_id: Option<String>,
+    #[serde(rename = "TenantId")] tenant_id: Option<String>,
 
     // A URI to a webpage that explains the terms of use policy of the WOPI server.
-    #[serde(rename = "TermsOfUseUrl")]
-    terms_of_use_url: Option<String>,
+    #[serde(rename = "TermsOfUseUrl")] terms_of_use_url: Option<String>,
 
     // A string that is used to pass time zone information to a WOPI client in
     // the format chosen by the WOPI server.
-    #[serde(rename = "TimeZone")]
-    time_zone: Option<String>,
+    #[serde(rename = "TimeZone")] time_zone: Option<String>,
 
     // A string that uniquely represents the file contents.
     //
     // This value MUST change when the file content changes.
     // This value MUST also be equivalent for all files with equivalent contents.
-    #[serde(rename = "UniqueContentId")]
-    unique_content_id: Option<String>,
+    #[serde(rename = "UniqueContentId")] unique_content_id: Option<String>,
 
     // A Boolean value that indicates that the user has permission to view a
     // broadcast of this file. A broadcast is file activity that involves one or
@@ -390,13 +398,11 @@ pub struct CheckFileInfoResponse {
     //
     // For example, a slideshow can be broadcast by a presenter to many
     // attendees.
-    #[serde(rename = "UserCanAttend")]
-    user_can_attend: Option<bool>,
+    #[serde(rename = "UserCanAttend")] user_can_attend: Option<bool>,
 
     // A Boolean value that indicates the user does not have sufficient
     // permissions to create new files on the WOPI server.
-    #[serde(rename = "UserCanNotWriteRelative")]
-    user_can_not_write_relative: Option<bool>,
+    #[serde(rename = "UserCanNotWriteRelative")] user_can_not_write_relative: Option<bool>,
 
     // A Boolean value that indicates that the user has permission to broadcast
     // this file to a set of users who have permission to broadcast or view a
@@ -405,59 +411,49 @@ pub struct CheckFileInfoResponse {
     //
     // For example, a slideshow can be broadcast by a presenter to many
     // attendees.
-    #[serde(rename = "UserCanPresent")]
-    user_can_present: Option<bool>,
+    #[serde(rename = "UserCanPresent")] user_can_present: Option<bool>,
 
     // A Boolean value that indicates the user has permissions to rename the file.
-    #[serde(rename = "UserCanRename")]
-    user_can_rename: Option<bool>,
+    #[serde(rename = "UserCanRename")] user_can_rename: Option<bool>,
 
     // A Boolean value that indicates that the user has permissions to alter the file.
-    #[serde(rename = "UserCanWrite")]
-    user_can_write: Option<bool>,
+    #[serde(rename = "UserCanWrite")] user_can_write: Option<bool>,
 
     // A string that is the name of the user.
     //
     // If blank, the WOPI client MAY be configured to use a placeholder string
     // in some scenarios, or to show no name at all.
-    #[serde(rename = "UserFriendlyName")]
-    user_friendly_name: Option<String>,
+    #[serde(rename = "UserFriendlyName")] user_friendly_name: Option<String>,
 
     // A string that is used by the WOPI server to uniquely identify the user.
-    #[serde(rename = "UserId")]
-    user_id: Option<String>,
+    #[serde(rename = "UserId")] user_id: Option<String>,
 
     // A string that the WOPI client SHOULD use to verify the user’s licensing status.
     // The WOPI client MAY ignore this string if it does not recognize the contents.
-    #[serde(rename = "UserInfo")]
-    user_info: Option<String>,
+    #[serde(rename = "UserInfo")] user_info: Option<String>,
 
     // A string representing the current version of the file based on the WOPI
     // server’s file versioning schema.
     //
     // This value MUST change when the file content changes, and version values
     // MUST never repeat for a given file.
-    #[serde(rename = "Version")]
-    version: String,
+    #[serde(rename = "Version")] version: String,
 
     // A Boolean value that indicates that the WOPI client MUST NOT allow the
     // user to use the WOPI client’s editing functionality to operate on the
     // file. This does not mean that the user doesn't have rights to edit the
     // file.
-    #[serde(rename = "WebEditingDisabled")]
-    web_editing_disabled: Option<bool>,
+    #[serde(rename = "WebEditingDisabled")] web_editing_disabled: Option<bool>,
 
     // An array of strings representing the workflow types that are available for the file.
-    #[serde(rename = "WorkflowType")]
-    workflow_type: Option<Vec<String>>,
+    #[serde(rename = "WorkflowType")] workflow_type: Option<Vec<String>>,
 
     // A string representing the current version of the file based on the WOPI
     // server’s file versioning schema.
     //
     // This value MUST change when the file content changes, and version values
     // MUST never repeat for a given file.
-    #[serde(rename = "WorkflowUrl")]
-    workflow_url: Option<String>,
+    #[serde(rename = "WorkflowUrl")] workflow_url: Option<String>,
 }
 
 impl Default for CheckFileInfoResponse {
@@ -467,7 +463,7 @@ impl Default for CheckFileInfoResponse {
             allow_external_marketplace: Some(false),
             base_file_name: "".to_string(),
             breadcrumb_brand_name: Some("".to_string()),
-            breadcrumb_brand_url: "".to_string(),
+            breadcrumb_brand_url: Some("".to_string()),
             breadcrumb_doc_name: Some("".to_string()),
             breadcrumb_doc_url: Some("".to_string()),
             breadcrumb_folder_name: Some("".to_string()),
@@ -547,106 +543,87 @@ impl Default for CheckFileInfoResponse {
 #[derive(Serialize)]
 pub struct CheckFolderInfoResponse {
     // The name of the folder without the path. Used for display in the UI.
-    #[serde(rename = "FolderName")]
-    folder_name: String,
+    #[serde(rename = "FolderName")] folder_name: String,
 
     // A URI to an image that the WOPI client displays to the user as the
     // branding image of the WOPI server.
-    #[serde(rename = "BreadcrumbBrandIconUrl")]
-    breadcrumb_brand_icon_url: Option<String>,
+    #[serde(rename = "BreadcrumbBrandIconUrl")] breadcrumb_brand_icon_url: Option<String>,
 
     // A string that the WOPI client displays to the user that indicates the
     // brand name of the WOPI server.
-    #[serde(rename = "BreadcrumbBrandName")]
-    breadcrumb_brand_name: Option<String>,
+    #[serde(rename = "BreadcrumbBrandName")] breadcrumb_brand_name: Option<String>,
 
     //  A URI to a web page that the WOPI client navigates to when the user
     //  clicks on the UI that displays BreadcrumbBrandName.
-    #[serde(rename = "BreadcrumbBrandUrl")]
-    breadcrumb_brand_url: Option<String>,
+    #[serde(rename = "BreadcrumbBrandUrl")] breadcrumb_brand_url: Option<String>,
 
     // A string that the WOPI client displays to the user that indicates the
     // name of the file.
-    #[serde(rename = "BreadcrumbDocName")]
-    breadcrumb_doc_name: Option<String>,
+    #[serde(rename = "BreadcrumbDocName")] breadcrumb_doc_name: Option<String>,
 
     // A URI to a web page that the WOPI client navigates to when the user
     // clicks on the UI that displays BreadcrumbDocName.
-    #[serde(rename = "BreadcrumbDocUrl")]
-    breadcrumb_doc_url: Option<String>,
+    #[serde(rename = "BreadcrumbDocUrl")] breadcrumb_doc_url: Option<String>,
 
     // A string that the WOPI client displays to the user that indicates the
     // name of the folder that contains the file.
-    #[serde(rename = "BreadcrumbFolderName")]
-    breadcrumb_folder_name: Option<String>,
+    #[serde(rename = "BreadcrumbFolderName")] breadcrumb_folder_name: Option<String>,
 
     // A URI to a web page that the WOPI client navigates to when the user
     // clicks on the UI that displays BreadcrumbFolderName.
-    #[serde(rename = "BreadcrumbFolderUrl")]
-    breadcrumb_folder_url: Option<String>,
+    #[serde(rename = "BreadcrumbFolderUrl")] breadcrumb_folder_url: Option<String>,
 
     // A user - accessible URI directly to the folder intended for opening the
     // file through a client.
     //
     // Can be a DAV URL ( [RFC5323]), but MAY be any URL that can be handled by
     // a client that can open a file of the given type.
-    #[serde(rename = "ClientUrl")]
-    client_url: Option<String>,
+    #[serde(rename = "ClientUrl")] client_url: Option<String>,
 
     // A Boolean value that indicates that the WOPI client SHOULD close the
     // browser window containing the output of the WOPI client when the user
     // calls the close UI.
-    #[serde(rename = "CloseButtonClosesWindow")]
-    close_button_closes_window: Option<bool>,
+    #[serde(rename = "CloseButtonClosesWindow")] close_button_closes_window: Option<bool>,
 
     // A URI to a web page that the implementer deems useful to a user in the
     // event that the user closes the rendering or editing client currently
     // using this folder.
-    #[serde(rename = "CloseUrl")]
-    close_url: Option<String>,
+    #[serde(rename = "CloseUrl")] close_url: Option<String>,
 
     // A URI to a location that allows the user to share the file.
-    #[serde(rename = "FileSharingUrl")]
-    file_sharing_url: Option<String>,
+    #[serde(rename = "FileSharingUrl")] file_sharing_url: Option<String>,
 
     // A string that is used by the WOPI server to uniquely identify the user.
-    #[serde(rename = "HostAuthenticationId")]
-    host_authentication_id: Option<String>,
+    #[serde(rename = "HostAuthenticationId")] host_authentication_id: Option<String>,
 
     // A URI to a web page that provides an editing experience for the folder
     // utilizing the WOPI client.
-    #[serde(rename = "HostEditUrl")]
-    host_edit_url: Option<String>,
+    #[serde(rename = "HostEditUrl")] host_edit_url: Option<String>,
 
     // A URI to a web page that provides access to an editing experience for the
     // folder that can be embedded in another HTML page.
     //
     // For example, a page that provides an HTML snippet that can be inserted
     // into the HTML of a blog.
-    #[serde(rename = "HostEmbeddedEditUrl")]
-    host_embedded_edit_url: Option<String>,
+    #[serde(rename = "HostEmbeddedEditUrl")] host_embedded_edit_url: Option<String>,
 
     // A URI to a web page that provides access to a viewing experience for the
     // folder that can be embedded in another HTML page.
     //
     // For example, a page that provides an HTML snippet that can be inserted
     // into the HTML of a blog.
-    #[serde(rename = "HostEmbeddedViewUrl")]
-    host_embedded_view_url: Option<String>,
+    #[serde(rename = "HostEmbeddedViewUrl")] host_embedded_view_url: Option<String>,
 
     // A string that is the name provided by the WOPI server used to identify it
     // for logging and other informational purposes.
-    #[serde(rename = "HostName")]
-    host_name: Option<String>,
+    #[serde(rename = "HostName")] host_name: Option<String>,
 
     // A URI to a web page that provides a viewing experience for the folder
     // utilizing the WOPI client.
-    #[serde(rename = "HostViewUrl")]
-    host_view_url: Option<String>,
+    #[serde(rename = "HostViewUrl")] host_view_url: Option<String>,
 
     // A string that SHOULD uniquely identify the owner of the file.
-    #[serde(rename = "OwnerId")]
-    owner_id: String,
+    #[serde(rename = "OwnerId")] owner_id: String,
 
     // A string that identifies the provider of information that a WOPI client
     // uses to discover information about the user’s online status (for example,
@@ -654,56 +631,45 @@ pub struct CheckFolderInfoResponse {
     //
     // A WOPI client requires knowledge of specific presence providers to be
     // able to take advantage of this value.
-    #[serde(rename = "PresenceProvider")]
-    presence_provider: Option<String>,
+    #[serde(rename = "PresenceProvider")] presence_provider: Option<String>,
 
     // A string that identifies the user in the context of the PresenceProvider.
-    #[serde(rename = "PresenceUserId")]
-    presence_user_id: Option<String>,
+    #[serde(rename = "PresenceUserId")] presence_user_id: Option<String>,
 
     // A URI to a webpage that explains the privacy policy of the WOPI server.
-    #[serde(rename = "PrivacyUrl")]
-    privacy_url: Option<String>,
+    #[serde(rename = "PrivacyUrl")] privacy_url: Option<String>,
 
     // A URI that will sign the current user out of the WOPI server supported
     // authentication system.
-    #[serde(rename = "SignoutUrl")]
-    signout_url: Option<String>,
+    #[serde(rename = "SignoutUrl")] signout_url: Option<String>,
 
     // A Boolean value that indicates that the WOPI server supports calls to a
     // secure data store utilizing credentials stored in the file.
-    #[serde(rename = "SupportsSecureStore")]
-    supports_secure_store: Option<bool>,
+    #[serde(rename = "SupportsSecureStore")] supports_secure_store: Option<bool>,
 
     // A string that is used by the WOPI server to uniquely identify the tenant.
-    #[serde(rename = "TenantId")]
-    tenant_id: Option<String>,
+    #[serde(rename = "TenantId")] tenant_id: Option<String>,
 
     // A URI to a webpage that explains the terms of use policy of the WOPI server.
-    #[serde(rename = "TermsOfUseUrl")]
-    terms_of_use_url: Option<String>,
+    #[serde(rename = "TermsOfUseUrl")] terms_of_use_url: Option<String>,
 
     // Indicates that the user has permissions to alter the folder.
-    #[serde(rename = "UserCanWrite")]
-    user_can_write: Option<bool>,
+    #[serde(rename = "UserCanWrite")] user_can_write: Option<bool>,
 
     // A string that is the name of the user.
     //
     // If blank, the WOPI client MAY be configured to use a placeholder string
     // in some scenarios, or to show no name at all.
-    #[serde(rename = "UserFriendlyName")]
-    user_friendly_name: Option<String>,
+    #[serde(rename = "UserFriendlyName")] user_friendly_name: Option<String>,
 
     // A string that is used by the WOPI server to uniquely identify the user.
-    #[serde(rename = "UserId")]
-    user_id: Option<String>,
+    #[serde(rename = "UserId")] user_id: Option<String>,
 
     // A Boolean value that indicates that the WOPI client MUST NOT allow the
     // user to use the WOPI client’s editing functionality to operate on the
     // file. This does not mean that the user doesn't have rights to edit the
     // file.
-    #[serde(rename = "WebEditingDisabled")]
-    web_editing_disabled: Option<bool>,
+    #[serde(rename = "WebEditingDisabled")] web_editing_disabled: Option<bool>,
 }
 
 impl Default for CheckFolderInfoResponse {
@@ -933,8 +899,7 @@ impl<'a, 'r> FromRequest<'a, 'r> for UnlockAndRelock {
 #[derive(Debug, Deserialize)]
 pub struct DiscoveryNetZone {
     name: String,
-    #[serde(rename = "app")]
-    apps: Vec<DiscoveryApp>,
+    #[serde(rename = "app")] apps: Vec<DiscoveryApp>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -952,8 +917,15 @@ pub struct DiscoveryAction {
 
 #[derive(Debug, Deserialize)]
 pub struct Discovery {
-    #[serde(rename = "net-zone")]
-    net_zone: DiscoveryNetZone,
+    #[serde(rename = "net-zone")] net_zone: DiscoveryNetZone,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CreateFileInfo {
+    id: Uuid,
+    // TODO: optional?
+    name: String,
+    file_type: String,
 }
 
 pub fn get_certs() -> std::io::Result<Vec<Vec<u8>>> {
@@ -967,7 +939,7 @@ pub fn get_certs() -> std::io::Result<Vec<Vec<u8>>> {
 }
 
 pub fn parse_discovery(uri: &str) -> reqwest::Result<Discovery> {
-    let mut res = {
+    let res = {
         let mut builder = reqwest::Client::builder()?;
         // TODO: handle errors
         if let Ok(certs) = get_certs() {
@@ -990,14 +962,37 @@ fn path_from_uuid(uuid: Uuid) -> PathBuf {
         .collect::<PathBuf>()
 }
 
-fn create_file() {
-    use std::str;
+pub fn establish_connection() -> PgConnection {
+    dotenv().ok();
+
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL must be set");
+    PgConnection::establish(&database_url).expect(&format!("Error connecting to {}", database_url))
+}
+
+pub fn create_file(file_info: CreateFileInfo) -> Result<File> {
+    use schema::files;
 
     let my_uuid = Uuid::new_v4();
     println!("{}", my_uuid);
 
     let path = path_from_uuid(my_uuid);
     println!("Path: {:?}", path);
+
+    // TODO: from template?
+    std::fs::File::create(path)
+        .chain_err(|| format!("Error creating new file: {}", file_info.name))?;
+
+    let new_file = NewFile {
+        id: my_uuid,
+        name: file_info.name,
+        file_type: file_info.file_type,
+    };
+
+    let conn = establish_connection();
+    diesel::insert(&new_file)
+        .into(files::table)
+        .get_result(&conn)
+        .chain_err(|| "Error saving new file to database")
 }
 
 // Conditionally compile the module `test` only when the test-suite is run.

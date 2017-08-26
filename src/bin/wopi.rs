@@ -9,6 +9,8 @@ extern crate wopi;
 use rocket_contrib::Json;
 
 use wopi::*;
+use wopi::models::*;
+use wopi::errors::Result;
 
 #[get("/wopi*/files/<id>")]
 fn check_file_info(id: String) -> Option<Json<CheckFileInfoResponse>> {
@@ -119,104 +121,94 @@ fn enumerate_children(id: String) {
     println!("Enumerate children: {}", id);
 }
 
+// TODO: format = "application/json"?
+#[post("/files", data = "<file_info>")]
+fn create_file_handler(file_info: Json<CreateFileInfo>) -> Result<Json<File>> {
+    println!("create_file: {:?}", file_info);
+    create_file(file_info.into_inner()).map(|file| Json(file))
+}
+
 fn rocket() -> rocket::Rocket {
-    rocket::ignite().mount("/", routes![
-        // http://server/<...>/wopi*/files/<id>
-        // Provides access to information about a file and allows for
-        // file-level operations.
+    rocket::ignite()
+        .mount("/api", routes![create_file_handler,])
+        .mount(
+            "/",
+            routes![
+                // http://server/<...>/wopi*/files/<id>
+                // Provides access to information about a file and allows for
+                // file-level operations.
 
-        // CheckFileInfo
-        check_file_info,
+                // CheckFileInfo
+                check_file_info,
+                // DeleteFile:
+                // Removes a file from the WOPI server.
+                delete_file,
+                // ExecuteCellStorageRelativeRequest:
+                // Changes the contents of the file in accordance with [MS-FSSHTTP].
 
-        // DeleteFile:
-        // Removes a file from the WOPI server.
-        delete_file,
+                // ExecuteCellStorageRequest:
+                // Changes the contents of the file in accordance with [MS-FSSHTTP].
 
-        // ExecuteCellStorageRelativeRequest:
-        // Changes the contents of the file in accordance with [MS-FSSHTTP].
+                // GetLock:
+                // Retrieves a lock for editing a file.
+                get_file_lock,
+                // GetRestrictedLink:
+                // Gets a link to a file through which a user is able to operate on a
+                // file in a limited way.
+                get_restricted_link,
+                // GetShareUrl:
+                // Gets a URI to the file that is suitable for sharing with other users.
+                get_share_url,
+                // Lock:
+                // Takes a lock for editing a file.
+                get_lock,
+                // PutRelativeFile:
+                // Creates a copy of a file on the WOPI server.
+                put_relative_file,
+                // PutUserInfo:
+                // Stores user information on the WOPI server.
+                put_user_info,
+                // ReadSecureStore:
+                // Accesses the WOPI server's implementation of a secure store.
+                read_secure_store,
+                // RefreshLock:
+                // Refreshes a lock for editing a file.
+                refresh_lock,
+                // RenameFile:
+                // Renames a file.
+                rename_file,
+                // RevokeRestrictedLink:
+                // Revokes all links to a file through which a number of users are
+                // able to operate on a file in a limited way.
+                revoke_restricted_link,
+                // Unlock:
+                // Releases a lock for editing a file.
+                unlock,
+                // UnlockAndRelock:
+                // Releases and then retakes a lock for editing a file.
+                unlock_and_relock,
+                // http://server/<...>/wopi*/folders/<id>
+                // Return information about the folder and permissions that the
+                // current user has relative to that file.
+                check_folder_info,
+                // http://server/<...>/wopi*/files/<id>/contents
 
-        // ExecuteCellStorageRequest:
-        // Changes the contents of the file in accordance with [MS-FSSHTTP].
+                // GetFile:
+                // Request message to retrieve a file for the
+                // HTTP://server/<...>/wopi*/files/<id>/contents operation.
+                get_file,
+                // PutFile:
+                // Request message to update a file for
+                // the http://server/<...>/wopi*/files/<id>/contents
+                // operation.
+                put_file,
+                // http://server/<...>/wopi*/folders/<id>/children
 
-        // GetLock:
-        // Retrieves a lock for editing a file.
-        get_file_lock,
-
-        // GetRestrictedLink:
-        // Gets a link to a file through which a user is able to operate on a
-        // file in a limited way.
-        get_restricted_link,
-
-        // GetShareUrl:
-        // Gets a URI to the file that is suitable for sharing with other users.
-        get_share_url,
-
-
-        // Lock:
-        // Takes a lock for editing a file.
-        get_lock,
-
-        // PutRelativeFile:
-        // Creates a copy of a file on the WOPI server.
-        put_relative_file,
-
-        // PutUserInfo:
-        // Stores user information on the WOPI server.
-        put_user_info,
-
-        // ReadSecureStore:
-        // Accesses the WOPI server's implementation of a secure store.
-        read_secure_store,
-
-
-        // RefreshLock:
-        // Refreshes a lock for editing a file.
-        refresh_lock,
-
-        // RenameFile:
-        // Renames a file.
-        rename_file,
-
-        // RevokeRestrictedLink:
-        // Revokes all links to a file through which a number of users are
-        // able to operate on a file in a limited way.
-        revoke_restricted_link,
-
-        // Unlock:
-        // Releases a lock for editing a file.
-        unlock,
-
-        // UnlockAndRelock:
-        // Releases and then retakes a lock for editing a file.
-        unlock_and_relock,
-
-
-        // http://server/<...>/wopi*/folders/<id>
-        // Return information about the folder and permissions that the current user has relative
-        // to that file.
-        check_folder_info,
-
-
-        // http://server/<...>/wopi*/files/<id>/contents
-
-        // GetFile:
-        // Request message to retrieve a file for the HTTP://server/<...>/wopi*/files/<id>/contents
-        // operation.
-        get_file,
-
-        // PutFile:
-        // Request message to update a file for
-        // the http://server/<...>/wopi*/files/<id>/contents
-        // operation.
-        put_file,
-
-
-        // http://server/<...>/wopi*/folders/<id>/children
-
-        // EnumerateChildren:
-        // Returns a set of URIs that provides access to resources in the folder
-        enumerate_children,
-    ])
+                // EnumerateChildren:
+                // Returns a set of URIs that provides access to resources in the folder
+                enumerate_children,
+            ],
+        )
 }
 
 fn main() {

@@ -8,6 +8,8 @@ The intended use case is to host your own instance of Collabora Office as an alt
 installation
 ============
 
+`wopi` builds on Rust nightly and the minimum `rustc` is `1.21.0-nightly (2017-08-10)` (due to Rocket 0.3.1).
+
 Clone this repository and build with `cargo`:
 
     $ cargo build --release
@@ -16,7 +18,15 @@ By default, `wopi` connects to `https://localhost:9980` (default for Collabora O
 
     $ cargo run --bin get_certs localhost:9980
 
-The above command will put the DER-encoded certificates into a directory called `certs` in the working directory, which this priject will use.
+The above command will put the DER-encoded certificates into a directory called `certs` in the working directory, which this project will use.
+
+Set up your database and put the authentication details in a file at the root called `.env`, such as:
+
+    $ echo "DATABASE_URL=postgres://wopi@localhost/wopi"
+
+Initialize the database:
+
+    $ diesel setup
 
 Finally run with `cargo run`:
 
